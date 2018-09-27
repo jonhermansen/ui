@@ -10,79 +10,44 @@ import (
 	"unsafe"
 )
 
-// #include "ui.h"
-// extern void doEntryOnChanged(uiEntry *, void *);
-// static inline void realuiEntryOnChanged(uiEntry *b)
-// {
-// 	uiEntryOnChanged(b, doEntryOnChanged, NULL);
-// }
+// #include "pkgui.h"
 import "C"
-
-// no need to lock this; only the GUI thread can access it
-var entries = make(map[*C.uiEntry]*Entry)
 
 // Entry is a Control that represents a space that the user can
 // type a single line of text into.
 type Entry struct {
-	c	*C.uiControl
+	ControlBase
 	e	*C.uiEntry
-
 	onChanged		func(*Entry)
+}
+
+func finishNewEntry(ee *C.uiEntry) *Entry {
+	e := new(Entry)
+
+	e.e = ee
+
+	C.pkguiEntryOnChanged(e.e)
+
+	e.ControlBase = NewControlBase(e, uintptr(unsafe.Pointer(e.e)))
+	return e
 }
 
 // NewEntry creates a new Entry.
 func NewEntry() *Entry {
-	e := new(Entry)
-
-	e.e = C.uiNewEntry()
-	e.c = (*C.uiControl)(unsafe.Pointer(e.e))
-
-	C.realuiEntryOnChanged(e.e)
-	entries[e.e] = e
-
-	return e
+	return finishNewEntry(C.uiNewEntry())
 }
 
-// Destroy destroys the Entry.
-func (e *Entry) Destroy() {
-	delete(entries, e.e)
-	C.uiControlDestroy(e.c)
+// NewPasswordEntry creates a new Entry whose contents are
+// visibly obfuscated, suitable for passwords.
+func NewPasswordEntry() *Entry {
+	return finishNewEntry(C.uiNewPasswordEntry())
 }
 
-// LibuiControl returns the libui uiControl pointer that backs
-// the Window. This is only used by package ui itself and should
-// not be called by programs.
-func (e *Entry) LibuiControl() uintptr {
-	return uintptr(unsafe.Pointer(e.c))
-}
-
-// Handle returns the OS-level handle associated with this Entry.
-// On Windows this is an HWND of a standard Windows API EDIT
-// class (as provided by Common Controls version 6).
-// On GTK+ this is a pointer to a GtkEntry.
-// On OS X this is a pointer to a NSTextField.
-func (e *Entry) Handle() uintptr {
-	return uintptr(C.uiControlHandle(e.c))
-}
-
-// Show shows the Entry.
-func (e *Entry) Show() {
-	C.uiControlShow(e.c)
-}
-
-// Hide hides the Entry.
-func (e *Entry) Hide() {
-	C.uiControlHide(e.c)
-}
-
-// Enable enables the Entry.
-func (e *Entry) Enable() {
-	C.uiControlEnable(e.c)
-}
-
-// Disable disables the Entry.
-func (e *Entry) Disable() {
-	C.uiControlDisable(e.c)
+// NewSearchEntry creates a new Entry suitable for searching with.
+// Changed events may, depending on the system, be delayed
+// with a search Entry, to produce a smoother user experience.
+func NewSearchEntry() *Entry {
+	return finishNewEntry(C.uiNewSearchEntry())
 }
 
 // Text returns the Entry's text.
@@ -106,9 +71,9 @@ func (e *Entry) OnChanged(f func(*Entry)) {
 	e.onChanged = f
 }
 
-//export doEntryOnChanged
-func doEntryOnChanged(ee *C.uiEntry, data unsafe.Pointer) {
-	e := entries[ee]
+//export pkguiDoEntryOnChanged
+func pkguiDoEntryOnChanged(ee *C.uiEntry, data unsafe.Pointer) {
+	e := ControlFromLibui(uintptr(unsafe.Pointer(ee))).(*Entry)
 	if e.onChanged != nil {
 		e.onChanged(e)
 	}

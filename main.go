@@ -9,20 +9,16 @@ import (
 	"unsafe"
 )
 
-// #include "ui.h"
-// extern void doQueued(void *);
-// extern int doOnShouldQuit(void *);
-// /* I forgot how dumb cgo is... ./main.go:73: cannot use _Cgo_ptr(_Cfpvar_fp_doQueued) (type unsafe.Pointer) as type *[0]byte in argument to _Cfunc_uiQueueMain */
-// /* I'm pretty sure this worked before... */
-// static inline void realQueueMain(void *x)
-// {
-// 	uiQueueMain(doQueued, x);
-// }
-// static inline void realOnShouldQuit(void)
-// {
-// 	uiOnShouldQuit(doOnShouldQuit, NULL);
-// }
+// #include "pkgui.h"
 import "C"
+
+// make sure main() runs on the first thread created by the OS
+// if main() calls Main(), things will just work on macOS, where the first thread created by the OS is the only thread allowed to be the main GUI thread
+// we might as well lock the OS thread for the other platforms here too (though on those it doesn't matter *which* thread we lock to)
+// TODO describe the source of this trick
+func init() {
+	runtime.LockOSThread()
+}
 
 // Main initializes package ui, runs f to set up the program,
 // and executes the GUI main loop. f should set up the program's
@@ -32,29 +28,18 @@ import "C"
 // nil. If package ui fails to initialize, Main returns an appropriate
 // error.
 func Main(f func()) error {
-	errchan := make(chan error)
-	go start(errchan, f)
-	return <-errchan
-}
-
-func start(errchan chan error, f func()) {
-	runtime.LockOSThread()
-
-	ensureMainThread()
-
-	// TODO HEAP SAFETY
-	opts := C.uiInitOptions{}
-	estr := C.uiInit(&opts)
+	opts := C.pkguiAllocInitOptions()
+	estr := C.uiInit(opts)
+	C.pkguiFreeInitOptions(opts)
 	if estr != nil {
-		errchan <- errors.New(C.GoString(estr))
+		err := errors.New(C.GoString(estr))
 		C.uiFreeInitError(estr)
-		return
+		return err
 	}
-	// set up OnShouldQuit()
-	C.realOnShouldQuit()
+	C.pkguiOnShouldQuit()
 	QueueMain(f)
 	C.uiMain()
-	errchan <- nil
+	return nil
 }
 
 // Quit queues a return from Main. It does not exit the program.
@@ -79,6 +64,14 @@ var (
 // primary purpose is to allow communication between other
 // goroutines and the GUI thread. Calling QueueMain after Quit
 // has been called results in undefined behavior.
+// 
+// If you start a goroutine in f, it also cannot call package ui
+// functions. So for instance, the following will result in
+// undefined behavior:
+// 
+// 	ui.QueueMain(func() {
+// 		go ui.MsgBox(...)
+// 	})
 func QueueMain(f func()) {
 	qmlock.Lock()
 	defer qmlock.Unlock()
@@ -92,11 +85,11 @@ func QueueMain(f func()) {
 		}
 	}
 	qmmap[n] = f
-	C.realQueueMain(unsafe.Pointer(n))
+	C.pkguiQueueMain(C.uintptr_t(n))
 }
 
-//export doQueued
-func doQueued(nn unsafe.Pointer) {
+//export pkguiDoQueueMain
+func pkguiDoQueueMain(nn unsafe.Pointer) {
 	qmlock.Lock()
 
 	n := uintptr(nn)
@@ -123,10 +116,12 @@ func OnShouldQuit(f func() bool) {
 	shouldQuitFunc = f
 }
 
-//export doOnShouldQuit
-func doOnShouldQuit(unused unsafe.Pointer) C.int {
+//export pkguiDoOnShouldQuit
+func pkguiDoOnShouldQuit(unused unsafe.Pointer) C.int {
 	if shouldQuitFunc == nil {
 		return 0
 	}
 	return frombool(shouldQuitFunc())
 }
+
+// TODO Timer?

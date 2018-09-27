@@ -6,82 +6,31 @@ import (
 	"unsafe"
 )
 
-// #include "ui.h"
-// extern void doCheckboxOnToggled(uiCheckbox *, void *);
-// static inline void realuiCheckboxOnToggled(uiCheckbox *c)
-// {
-// 	uiCheckboxOnToggled(c, doCheckboxOnToggled, NULL);
-// }
+// #include "pkgui.h"
 import "C"
-
-// no need to lock this; only the GUI thread can access it
-var checkboxes = make(map[*C.uiCheckbox]*Checkbox)
 
 // Checkbox is a Control that represents a box with a text label at its
 // side. When the user clicks the checkbox, a check mark will appear
 // in the box; clicking it again removes the check.
 type Checkbox struct {
-	co	*C.uiControl
+	ControlBase
 	c	*C.uiCheckbox
-
 	onToggled		func(*Checkbox)
 }
 
-// NewCheckbox creates a new Checkbox with the given text as its label.
+// NewCheckbox creates a new Checkbox with the given text as its
+// label.
 func NewCheckbox(text string) *Checkbox {
 	c := new(Checkbox)
 
 	ctext := C.CString(text)
 	c.c = C.uiNewCheckbox(ctext)
-	c.co = (*C.uiControl)(unsafe.Pointer(c.c))
 	freestr(ctext)
 
-	C.realuiCheckboxOnToggled(c.c)
-	checkboxes[c.c] = c
+	C.pkguiCheckboxOnToggled(c.c)
 
+	c.ControlBase = NewControlBase(c, uintptr(unsafe.Pointer(c.c)))
 	return c
-}
-
-// Destroy destroys the Checkbox.
-func (c *Checkbox) Destroy() {
-	delete(checkboxes, c.c)
-	C.uiControlDestroy(c.co)
-}
-
-// LibuiControl returns the libui uiControl pointer that backs
-// the Window. This is only used by package ui itself and should
-// not be called by programs.
-func (c *Checkbox) LibuiControl() uintptr {
-	return uintptr(unsafe.Pointer(c.co))
-}
-
-// Handle returns the OS-level handle associated with this Checkbox.
-// On Windows this is an HWND of a standard Windows API BUTTON
-// class (as provided by Common Controls version 6).
-// On GTK+ this is a pointer to a GtkCheckButton.
-// On OS X this is a pointer to a NSButton.
-func (c *Checkbox) Handle() uintptr {
-	return uintptr(C.uiControlHandle(c.co))
-}
-
-// Show shows the Checkbox.
-func (c *Checkbox) Show() {
-	C.uiControlShow(c.co)
-}
-
-// Hide hides the Checkbox.
-func (c *Checkbox) Hide() {
-	C.uiControlHide(c.co)
-}
-
-// Enable enables the Checkbox.
-func (c *Checkbox) Enable() {
-	C.uiControlEnable(c.co)
-}
-
-// Disable disables the Checkbox.
-func (c *Checkbox) Disable() {
-	C.uiControlDisable(c.co)
 }
 
 // Text returns the Checkbox's text.
@@ -105,9 +54,9 @@ func (c *Checkbox) OnToggled(f func(*Checkbox)) {
 	c.onToggled = f
 }
 
-//export doCheckboxOnToggled
-func doCheckboxOnToggled(cc *C.uiCheckbox, data unsafe.Pointer) {
-	c := checkboxes[cc]
+//export pkguiDoCheckboxOnToggled
+func pkguiDoCheckboxOnToggled(cc *C.uiCheckbox, data unsafe.Pointer) {
+	c := ControlFromLibui(uintptr(unsafe.Pointer(cc))).(*Checkbox)
 	if c.onToggled != nil {
 		c.onToggled(c)
 	}
